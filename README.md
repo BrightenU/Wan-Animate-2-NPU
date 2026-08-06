@@ -10,7 +10,7 @@ Boundaries of Character Animation Models</b></i></h2>
 <sup>∗</sup>Core Contribution &nbsp; <sup>†</sup>Project leaders &nbsp; <sup>‡</sup>Sponsor
 
 <!-- TODO -->
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Wan-Video/Wan-Animate-2) &nbsp; [![arXiv](https://img.shields.io/badge/arXiv-2504.01016-b31b1b.svg)]() &nbsp; [![Project Page](https://img.shields.io/badge/Project-Page-Green)](https://humanaigc.github.io/wan-animate-2)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Wan-Video/Wan-Animate-2) &nbsp; [![arXiv](https://img.shields.io/badge/arXiv-Coming%20Soon-b31b1b.svg)]() &nbsp; [![Project Page](https://img.shields.io/badge/Project-Page-Green)](https://humanaigc.github.io/wan-animate-2) &nbsp; [![Demo](https://img.shields.io/badge/Demo-ModelScope-FF6A00.svg)](https://www.modelscope.cn/studios/Wan-AI/Wan2.2-Animate)
 
 </div>
 
@@ -61,12 +61,12 @@ pip install -e .
 Download models using huggingface-cli:
 ```sh
 pip install "huggingface_hub[cli]"
-huggingface-cli download Wan-AI/Wan-Animate-2-14B --local-dir ./ckpts/
+huggingface-cli download Wan-AI/Wan2.2-Animate-2-14B --local-dir ./ckpts/
 ```
 Download models using modelscope-cli:
  ```sh
 pip install modelscope
-modelscope download --model Wan-AI/Wan-Animate-2-14B --local_dir ./ckpts/
+modelscope download --model Wan-AI/Wan2.2-Animate-2-14B --local_dir ./ckpts/
 ```
 
 ### Inference
@@ -101,6 +101,9 @@ If your hardware setup is different, please adjust the parallel configs in the Y
   ```
 
 ## 🤖 Gradio Demo
+Try the online demo: [ModelScope Studio](https://www.modelscope.cn/studios/Wan-AI/Wan2.2-Animate)
+
+Run locally:
 - `Wan-Animate-2 Base`:
   ```bash
   cd infer
@@ -117,5 +120,10 @@ If your hardware setup is different, please adjust the parallel configs in the Y
 If you find this work helpful, please consider citing:
  
 ```BibTeX
-
+@software{Wan-Animate-2,
+  title = {Wan-Animate-2: Pushing the Application Boundaries of Character Animation Models},
+  author = {Wang, Guangyuan and Hu, Li and Meng, Dechao and Zhang, Zhongyi and Zhang, Peng and others},
+  year = {2026},
+  url = {https://github.com/Wan-Video/Wan-Animate-2}
+}
 ```
