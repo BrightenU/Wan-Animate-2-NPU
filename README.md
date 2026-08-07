@@ -120,11 +120,14 @@ Run locally:
 If you find this work helpful, please consider citing:
  
 ```BibTeX
-@software{Wan-Animate-2,
-  title = {Wan-Animate-2: Pushing the Application Boundaries of Character Animation Models},
-  author = {Wang, Guangyuan and Hu, Li and Meng, Dechao and Zhang, Zhongyi and Zhang, Peng and others},
-  year = {2026},
-  url = {https://github.com/Wan-Video/Wan-Animate-2}
+@article{wang2026wananimate2,
+  title   = {Wan-Animate-2: Real-Time End-to-End Character Animation via Diffusion Transformer},
+  author  = {Wang, Guangyuan and Hu, Li and Meng, Dechao and Zhang, Zhongyi and Zhang, Peng and
+             Huang, Mingyang and Zhang, Ruoshi and Sun, Ke and Zhang, Zhe and
+             Wang, Xingjun and Cheng, Gang and Zhang, Bang},
+  journal = {arXiv preprint arXiv:TODO.06009},
+  year    = {2026},
+  url     = {https://arxiv.org/abs/TODO.06009}
 }
 ```
 
