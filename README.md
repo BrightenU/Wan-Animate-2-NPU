@@ -26,7 +26,16 @@ Release Notes:
 - August 07, 2026: 🎉 We release the **Wan-Animate-2** inference scripts.
 - August 07, 2026: 🎉 We release the **Wan-Animate-2 Base** model weights.
 - August 07, 2026: 🎉 We release the **Wan-Animate-2 Distillation** model weights.
-
+  
+## 📑 Todo List
+- Wan-Animate-2 Character Animation
+    - [x] Inference code of Wan-Animate-2
+    - [x] Checkpoints of Wan-Animate-2
+    - [x] Diffusers integration
+    - [x] DiffSynth-Studio integration
+    - [x] ComfyUI integration
+    
+    
 ## 🚀 Quick Start
 ### Installation
 1. Clone this repo:
