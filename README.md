@@ -10,7 +10,7 @@ Boundaries of Character Animation Models</b></i></h2>
 <sup>∗</sup>Core Contribution &nbsp; <sup>†</sup>Project leaders &nbsp; <sup>‡</sup>Sponsor
 
 <!-- TODO -->
-[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Wan-Video/Wan-Animate-2) &nbsp; [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) &nbsp; [![arXiv](https://img.shields.io/badge/arXiv-Coming%20Soon-b31b1b.svg)](https://arxiv.org/pdf/2608.06009) &nbsp; [![Project Page](https://img.shields.io/badge/Project-Page-Green)](https://humanaigc.github.io/wan-animate-2) &nbsp; [![Demo](https://img.shields.io/badge/Demo-ModelScope-FF6A00.svg)](https://www.modelscope.cn/studios/Wan-AI/Wan2.2-Animate)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/Wan-Video/Wan-Animate-2) &nbsp; [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE) &nbsp; [![arXiv]([https://img.shields.io/badge/arXiv-Coming%20Soon-b31b1b.svg](https://img.shields.io/badge/arXiv-2504.01016-b31b1b.svg))](https://arxiv.org/pdf/2608.06009) &nbsp; [![Project Page](https://img.shields.io/badge/Project-Page-Green)](https://humanaigc.github.io/wan-animate-2) &nbsp; [![Demo](https://img.shields.io/badge/Demo-ModelScope-FF6A00.svg)](https://www.modelscope.cn/studios/Wan-AI/Wan2.2-Animate)
 
 </div>
 
