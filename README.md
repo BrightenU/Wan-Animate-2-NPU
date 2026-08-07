@@ -5,7 +5,7 @@
 <h2><i><b>Wan-Animate-2: Pushing the Application
 Boundaries of Character Animation Models</b></i></h2>
 
-[***Guangyuan Wang***](https://scholar.google.com/citations?user=OYwm0GsAAAAJ&hl=zh-CN)^∗^, [***Li Hu***](https://scholar.google.com/citations?user=Arz3iGUAAAAJ)^*†^, [***Dechao Meng***]()^∗^, [***Zhongyi Zhang***](https://scholar.google.com/citations?user=dOWmKOUAAAAJ)^∗^, [***Peng Zhang***](https://scholar.google.com/citations?user=QTgxKmkAAAAJ)^∗^, [***Mingyang Huang***](https://scholar.google.com/citations?user=EWb6NW4AAAAJ&hl=en), ***Ruoshi Zhang***, ***Ke Sun***, ***Zhe Zhang***, ***Xingjun Wang***, [***Gang Cheng***](https://scholar.google.com/citations?user=nMBg6S8AAAAJ&hl=en&authuser=1), ***Bang Zhang***^‡^
+[***Guangyuan Wang***](https://scholar.google.com/citations?user=OYwm0GsAAAAJ&hl=zh-CN)^∗^, [***Li Hu***](https://scholar.google.com/citations?user=Arz3iGUAAAAJ)^*†^, [***Dechao Meng***]()^∗^, [***Zhongyi Zhang***](https://scholar.google.com/citations?user=dOWmKOUAAAAJ)^∗^, [***Peng Zhang***](https://scholar.google.com/citations?user=QTgxKmkAAAAJ)^∗^, [***Mingyang Huang***](https://scholar.google.com/citations?user=EWb6NW4AAAAJ&hl=en), ***Ruoshi Zhang***, ***Ke Sun***, ***Zhe Zhang***, ***Xingjun Wang***, [***Gang Cheng***](https://scholar.google.com/citations?user=nMBg6S8AAAAJ&hl=en&authuser=1), ***Hai Xu***, ***Bang Zhang***^‡^
 
 <sup>∗</sup>Core Contribution &nbsp; <sup>†</sup>Project leaders &nbsp; <sup>‡</sup>Sponsor
 
