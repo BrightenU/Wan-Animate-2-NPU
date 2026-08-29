@@ -1,0 +1,17 @@
+---
+description: Record every Wan-Animate-2-NPU change in CHANGELOG and push to github
+alwaysApply: true
+---
+
+# 改动必须落盘并推 GitHub
+
+本仓是 `BrightenU/Wan-Animate-2-NPU`。官方 `origin`（Wan-Video/Wan-Animate-2）只读，禁止 `git push origin`。
+
+改完代码后立刻：
+
+1. 在 `CHANGELOG.md` 顶部 `[Unreleased]` 下追加一条：日期、为什么、改了哪些文件、验证方法和数字、还没做。
+2. 非琐碎改动再写 `docs/npu/YYYY-MM-DD-短标题.md`。
+3. 不要提交 `ckpts`、权重、成片 mp4、`examples/demo1_short/`、`infer/outputs_smoke/`。
+4. 提交并 `git push github`（remote 名是 `github`，不是 `origin`）。未设 `user.name` 时用环境变量写 author，不要改 git config。
+
+提交说明写清「为什么」，和 Changelog 一致。

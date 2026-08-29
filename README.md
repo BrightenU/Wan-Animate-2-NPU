@@ -1,5 +1,7 @@
 
 
+> **Fork:** 本仓是 Wan-Animate-2 的昇腾适配副本（[BrightenU/Wan-Animate-2-NPU](https://github.com/BrightenU/Wan-Animate-2-NPU)），不是官方仓。改动记在 [CHANGELOG.md](CHANGELOG.md) 和 [docs/npu/](docs/npu/)。权重用 `ckpts` → `../Wan-Animate-2/ckpts`，不要复制进仓。
+
 <div align="center">
 
 <h2><i><b>Wan-Animate-2: Pushing the Application
