@@ -1,5 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
-__pycache__/
-*.pyc
+
+# Weights are a symlink to Wan-Animate-2/ckpts — do not upload.
+ckpts
+infer/outputs_smoke/

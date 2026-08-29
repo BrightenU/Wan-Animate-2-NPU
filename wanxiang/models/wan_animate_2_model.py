@@ -1,20 +1,9 @@
 # Author: Guangyuan Wang
-import numpy as np
 import torch
 import torch.nn as nn
 import math
-from torch.nn.attention.flex_attention import create_block_mask
-from .attention import flash_attention, flex_attention
+from .attention import flash_attention, incontext_attention
 from wanxiang import ops
-from functools import lru_cache, partial
-
-def _score_mod_impl(score, b_idx, h_idx, q_idx, kv_idx, hw: int, log_scale: float):
-    condition = (kv_idx >= hw) & (kv_idx < 2 * hw)
-    return torch.where(condition, score + log_scale, score)
-
-@lru_cache(maxsize=32)
-def _get_score_mod(hw: int, log_scale: float = -1.0):
-    return partial(_score_mod_impl, hw=hw, log_scale=log_scale)
 
 def sinusoidal_embedding_1d(dim, position):
     # preprocess
@@ -344,7 +333,7 @@ class Incontext_AttentionBlock(nn.Module):
 
         return x_ref
 
-    def forward_gen(self, x, index, k_cache, v_cache, block_mask, context, freqs, freqs_ref, grid_sizes, grid_sizes_ref, 
+    def forward_gen(self, x, index, k_cache, v_cache, context, freqs, freqs_ref, grid_sizes, grid_sizes_ref, 
                     origin_len, origin_area, e, context_lens):
         
         origin_latent_f    = origin_len // 4 + 1
@@ -402,15 +391,13 @@ class Incontext_AttentionBlock(nn.Module):
         v_incontext[:, target_q_len : target_q_len + ref_f * origin_latent_hw]\
             .view(B, ref_f, origin_latent_hw, N, C)[:, :, :ref_hw] = v_ref_src
 
-        score_mod = _get_score_mod(hw=int(origin_latent_hw), log_scale=self.log_scale)
-
-        xout_full = flex_attention(
+        xout_full = incontext_attention(
             q=q_incontext,
             k=k_incontext,
             v=v_incontext,
-            block_mask=block_mask,
-            kernel_options=None,
-            score_mod=score_mod
+            origin_len=origin_len,
+            origin_area=origin_area,
+            log_scale=self.log_scale,
         )
         
         xout_valid = xout_full[:, :f * origin_latent_hw]
@@ -559,57 +546,6 @@ class WanAnimate2Transformer(nn.Module):
         # initialize weights
         self.init_weights()
         self.gradient_checkpointing = True
-        self.block_masks = dict()
-        self.block_mask_grid_sizes = dict()
-
-    # Author: Guangyuan Wang
-    def create_mask(self, origin_len, origin_area, device):
-        origin_latent_f = origin_len // 4 + 1
-        hw = int(np.prod(origin_area).item() // 256)
-
-        q_len = (origin_latent_f + 1) * hw
-        k_len = origin_latent_f * hw
-
-        q_len_total = math.ceil(q_len / 128) * 128
-        k_extra_len_total = math.ceil(k_len / 128) * 128
-        k_len_total = q_len_total + k_extra_len_total
-
-        q_limit = q_len
-        k_limit = k_len
-        q_total = q_len_total
-
-        def attention_mask_logic(b, h, q_idx, kv_idx):
-            q_valid = q_idx < q_limit
-            is_base_attention = kv_idx < q_limit
-            
-            q_frame = q_idx // hw
-            is_first_part = kv_idx < q_total
-            
-            kv_frame_1 = kv_idx // hw
-            kv_is_valid_1 = kv_idx < q_limit
-            
-            rel_kv_idx = kv_idx - q_total
-            kv_frame_2 = (rel_kv_idx // hw) + 1
-            kv_is_valid_2 = rel_kv_idx < k_limit
-            
-            kv_frame = torch.where(is_first_part, kv_frame_1, kv_frame_2)
-            kv_is_valid = torch.where(is_first_part, kv_is_valid_1, kv_is_valid_2)
-            
-            is_cond_attention = (q_frame == kv_frame) & kv_is_valid
-            
-            return q_valid & (is_base_attention | is_cond_attention)
-
-        block_mask = create_block_mask(
-            attention_mask_logic,
-            B=None, 
-            H=None,
-            Q_LEN=q_len_total,
-            KV_LEN=k_len_total,
-            device=device,
-            _compile=True
-        )
-        return block_mask
-
 
     def forward(self, *args, method, **kwargs):
         return getattr(self, method)(*args, **kwargs)
@@ -771,15 +707,8 @@ class WanAnimate2Transformer(nn.Module):
             context_clip = self.img_emb(clip_fea) # bs x 257 x dim
             context = torch.concat([context_clip, context], dim=1)
  
-        block_mask_id = (origin_len, origin_area[0], origin_area[1])
-        if block_mask_id not in self.block_masks:
-            self.block_masks[block_mask_id] = self.create_mask(origin_len, origin_area, x.device)
-        block_mask = self.block_masks[block_mask_id]
-
-        # arguments
         kwargs = dict(
             e=e0,
-            block_mask=block_mask,
             grid_sizes=grid_sizes,
             freqs=self.freqs,
             context=context,
