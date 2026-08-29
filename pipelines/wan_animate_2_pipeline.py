@@ -1,5 +1,4 @@
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import math
 import inspect
@@ -33,6 +32,22 @@ from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 from core import build_object_from_dict, BaseInferencePipeline
 
 from wanxiang import ops
+from wanxiang.ops.device import (
+    amp_device_type,
+    barrier as device_barrier,
+    configure_runtime,
+    device_count,
+    device_string,
+    dist_backend,
+    empty_cache,
+    is_available,
+    kind as device_kind,
+    manual_seed_all,
+    memory_allocated,
+    memory_reserved,
+    set_device,
+    synchronize,
+)
 from wanxiang.models.clip import AttentionBlock
 from wanxiang.models.vae import VideoVAE
 from wanxiang.utils.utils import TensorList, get_sharding_strategy, get_dtype
@@ -132,11 +147,11 @@ def retrieve_timesteps(
 
 
 def setup_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.deterministic = True
+    if torch.backends.cudnn.is_available():
+        torch.backends.cudnn.deterministic = True
 
 
 class ForwardStepWrapper(nn.Module):
@@ -225,7 +240,7 @@ def inference_core(item, gpu, cfg, clip, vae, model, t5, use_t5, context, contex
     logger.info('target_len: {}'.format(target_len))
     cond_images = zigzag_padding(cond_images, target_len)
 
-    torch.cuda.empty_cache()
+    empty_cache()
     idex = 0
     while True:
         if start + first_num >= len(cond_images):
@@ -266,7 +281,7 @@ def inference_core(item, gpu, cfg, clip, vae, model, t5, use_t5, context, contex
                                           "t c h w -> 1 c t h w",
                                           )
         idex += 1
-        dist.barrier(device_ids=[gpu])
+        device_barrier(device_id=gpu)
         for key, value in batch.items():
             if isinstance(value, torch.Tensor):
                 batch[key] = value.to(device=device, dtype=torch.bfloat16)
@@ -295,10 +310,10 @@ def inference_core(item, gpu, cfg, clip, vae, model, t5, use_t5, context, contex
             )
         ]
 
-        torch.cuda.empty_cache()
+        empty_cache()
 
         with (
-            torch.autocast(device_type=str(device), dtype=torch.bfloat16, enabled=True),
+            torch.autocast(device_type=amp_device_type(), dtype=torch.bfloat16, enabled=True),
             torch.no_grad()
         ):  
             sample_scheduler = FlowDPMSolverMultistepScheduler(
@@ -464,7 +479,7 @@ def inference_core(item, gpu, cfg, clip, vae, model, t5, use_t5, context, contex
             x0 = latents
             # 将latents转换为float32进行解码
             x0 = [x.to(dtype=torch.float32) for x in x0]
-            torch.cuda.empty_cache()
+            empty_cache()
             out_frames = torch.stack(vae.decode([x0[0][:, 1:]]))
 
             out = (
@@ -482,7 +497,7 @@ def inference_core(item, gpu, cfg, clip, vae, model, t5, use_t5, context, contex
             all_out_frames.extend([*out])
             start += CLIP_LEN - first_num
             end += CLIP_LEN - first_num
-            torch.cuda.empty_cache()
+            empty_cache()
     
     if gpu == 0:
         os.makedirs(os.path.split(output_path)[0], exist_ok=True)
@@ -517,21 +532,22 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
     cfg.rank = cfg.pmi_rank * cfg.test_cfg.gpu_infer_per_machine + gpu
 
     init_device = "cpu"
-    device = f'cuda:{gpu}'
+    configure_runtime()
+    device = device_string(gpu)
     vae = None
     model = None
     context = None
     context_null = None
 
     try:
-        torch.cuda.set_device(gpu)
-        logger.info(f"[GPU {gpu}] Initializing process group with rank {cfg.rank}, world_size {cfg.world_size}")
+        set_device(gpu)
+        logger.info(f"[{device_kind().upper()} {gpu}] Initializing process group with rank {cfg.rank}, world_size {cfg.world_size}, backend {dist_backend()}")
         dist.init_process_group(
-            backend="nccl",
+            backend=dist_backend(),
             init_method="env://",
             rank=cfg.rank,
             world_size=cfg.world_size,
-            timeout=timedelta(seconds=int(os.getenv("NCCL_INIT_TIMEOUT_SEC", "3600"))),
+            timeout=timedelta(seconds=int(os.getenv("DIST_INIT_TIMEOUT_SEC", os.getenv("NCCL_INIT_TIMEOUT_SEC", "3600")))),
         )
 
         if cfg.test_cfg.sp_size > cfg.test_cfg.world_size:
@@ -589,7 +605,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
                     checkpoint_path=cfg.model.clip_checkpoint,
                     tokenizer_path=cfg.model.clip_tokenizer,
                 )
-            logger.info(f" --> CLIP: {torch.cuda.memory_allocated()/1e9:.2f} GB, {torch.cuda.memory_reserved()/1e9:.2f} GB")
+            logger.info(f" --> CLIP: {memory_allocated()/1e9:.2f} GB, {memory_reserved()/1e9:.2f} GB")
 
             
             clip.model.visual = shard_transformer(
@@ -603,7 +619,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
             )
             clip.model.textual = clip.model.textual.to(device)
             
-            logger.info(f" --> CLIP FSDP: {torch.cuda.memory_allocated()/1e9:.2f} GB, {torch.cuda.memory_reserved()/1e9:.2f} GB")
+            logger.info(f" --> CLIP FSDP: {memory_allocated()/1e9:.2f} GB, {memory_reserved()/1e9:.2f} GB")
         except Exception as e:
             logger.error(f"[GPU {gpu}] Failed to initialize VAE: {str(e)}")
             logger.error(f"[GPU {gpu}] Error traceback: {traceback.format_exc()}")
@@ -618,7 +634,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
                 )
             vae.model = vae.model.to(device)
             vae.scale = [vae.scale[0].to(device), vae.scale[1].to(device)]
-            logger.info(f" --> VAE: {torch.cuda.memory_allocated()/1e9:.2f} GB, {torch.cuda.memory_reserved()/1e9:.2f} GB")
+            logger.info(f" --> VAE: {memory_allocated()/1e9:.2f} GB, {memory_reserved()/1e9:.2f} GB")
         except Exception as e:
             logger.error(f"[GPU {gpu}] Failed to initialize VAE: {str(e)}")
             logger.error(f"[GPU {gpu}] Error traceback: {traceback.format_exc()}")
@@ -637,7 +653,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
         cfg.test_cfg.sharding_size = min(cfg.test_cfg.sharding_size, cfg.test_cfg.world_size)
         # prepare fsdp args
         fsdp_mesh = init_device_mesh(
-                device_type='cuda', 
+                device_type=device_kind(),
                 mesh_shape=(dist.get_world_size() // cfg.test_cfg.sharding_size, cfg.test_cfg.sharding_size),
                 mesh_dim_names=('replicate', 'shard')
             )
@@ -672,7 +688,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
         else:
             sd = {}
 
-        dist.barrier(device_ids=[gpu])
+        device_barrier(device_id=gpu)
         set_model_state_dict(
             model=model,
             model_state_dict=sd,
@@ -685,7 +701,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
         )
         del sd
 
-        torch.cuda.empty_cache()
+        empty_cache()
         
         # init done
         logger.info(f'[GPU {gpu}] Worker initialization completed')
@@ -721,10 +737,10 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
 
     finally:
         try:
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
+            if is_available():
+                synchronize()
         except Exception as sync_e:
-            logger.warning(f"[GPU {gpu}] cuda.synchronize failed: {sync_e}")
+            logger.warning(f"[GPU {gpu}] synchronize failed: {sync_e}")
 
         if dist.is_available() and dist.is_initialized():
             try:
@@ -741,7 +757,7 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
         else:
             logger.info(f"[GPU {gpu}] Process group not initialized, skip barrier/destroy")
         try:
-            torch.cuda.empty_cache()
+            empty_cache()
         except Exception as cache_e:
             logger.warning(f"[GPU {gpu}] empty_cache failed: {cache_e}")
 
@@ -750,7 +766,8 @@ def worker(gpu, cfg, in_q_list, out_q, initialized_events):
 def main(cfg):
     cfg.pmi_rank = int(os.environ["RANK"])
     cfg.pmi_world_size = int(os.environ["WORLD_SIZE"])
-    cfg.test_cfg.gpu_infer_per_machine = torch.cuda.device_count()
+    configure_runtime()
+    cfg.test_cfg.gpu_infer_per_machine = device_count()
     cfg.world_size = cfg.pmi_world_size * cfg.test_cfg.gpu_infer_per_machine
     cfg.test_cfg.world_size = cfg.world_size
     

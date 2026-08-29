@@ -45,9 +45,9 @@ def main():
 
         print(f"[a2_batch] ({i+1}/{len(jobs)}) {out_dir}", flush=True)
         import gc
-        import torch
+        from wanxiang.ops.device import empty_cache
         gc.collect()
-        torch.cuda.empty_cache()
+        empty_cache()
         t0 = time.time()
         pipeline(
             refer_img_path=job["refer"],

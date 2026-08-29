@@ -1,3 +1,24 @@
+from .device import (
+    amp_device_type,
+    as_device,
+    autocast,
+    barrier as device_barrier,
+    configure_runtime,
+    detect_kind,
+    device_count,
+    device_string,
+    dist_backend,
+    empty_cache,
+    is_cuda,
+    is_npu,
+    kind as device_kind,
+    manual_seed_all,
+    memory_allocated,
+    memory_reserved,
+    set_device,
+    synchronize,
+)
+
 from .distributed import (
     is_dist_initialized,
     get_world_size,

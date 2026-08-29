@@ -1,6 +1,8 @@
 
 
 > **Fork:** 本仓是 Wan-Animate-2 的昇腾适配副本（[BrightenU/Wan-Animate-2-NPU](https://github.com/BrightenU/Wan-Animate-2-NPU)），不是官方仓。改动记在 [CHANGELOG.md](CHANGELOG.md) 和 [docs/npu/](docs/npu/)。权重用 `ckpts` → `../Wan-Animate-2/ckpts`，不要复制进仓。
+>
+> 4×910B3（64GB）推理：`WAN_DEVICE=npu ASCEND_RT_VISIBLE_DEVICES=0,1,2,3 bash infer/run_910b3.sh jobs.json`。不要在 NPU 上装 flash-attn。详情见 [docs/npu/2026-08-29-portable-npu-runtime.md](docs/npu/2026-08-29-portable-npu-runtime.md)。
 
 <div align="center">
 

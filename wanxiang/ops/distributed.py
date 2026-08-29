@@ -165,8 +165,8 @@ def all_gather(tensor, uniform_size=True, group=None, **kwargs):
 @functools.lru_cache()
 def get_global_gloo_group():
     backend = dist.get_backend()
-    assert backend in ['gloo', 'nccl']
-    if backend == 'nccl':
+    assert backend in ['gloo', 'nccl', 'hccl']
+    if backend in ('nccl', 'hccl'):
         return dist.new_group(backend='gloo')
     else:
         return dist.group.WORLD
@@ -174,8 +174,13 @@ def get_global_gloo_group():
 
 def _serialize_to_tensor(data, group):
     backend = dist.get_backend(group)
-    assert backend in ['gloo', 'nccl']
-    device = torch.device('cpu' if backend == 'gloo' else 'cuda')
+    assert backend in ['gloo', 'nccl', 'hccl']
+    if backend == 'gloo':
+        device = torch.device('cpu')
+    elif backend == 'hccl':
+        device = torch.device('npu')
+    else:
+        device = torch.device('cuda')
 
     buffer = pickle.dumps(data)
     if len(buffer) > 1024 ** 3:

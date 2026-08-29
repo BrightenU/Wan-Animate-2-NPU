@@ -75,10 +75,10 @@ test_cfg:
   frame_num: 37   
 
   # ------ parallel config ------
-  # Default upstream values are 8 (8x A800 / 720P). This machine has 2x H100;
-  # 480P was tested on 2x A800. Worker code also caps these to world_size.
-  sp_size: 2
-  sharding_size: 2
+  # Official default is 8 (8x A800). Worker caps both to world_size:
+  # 2x H100 -> 2, 4x 910B3 64GB -> 4.
+  sp_size: 4
+  sharding_size: 4
   
   ## FSDP config
   param_dtype: bfloat16

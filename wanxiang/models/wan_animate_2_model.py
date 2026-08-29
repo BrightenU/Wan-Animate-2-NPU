@@ -4,73 +4,66 @@ import torch.nn as nn
 import math
 from .attention import flash_attention, incontext_attention
 from wanxiang import ops
+from wanxiang.ops.device import amp_device_type
+
 
 def sinusoidal_embedding_1d(dim, position):
-    # preprocess
     assert dim % 2 == 0
     half = dim // 2
-    position = position.type(torch.float64)
-
-    # calculation
+    position = position.float()
     sinusoid = torch.outer(
-        position, torch.pow(10000, -torch.arange(half).to(position).div(half))
+        position, torch.pow(10000, -torch.arange(half, device=position.device, dtype=position.dtype).div(half))
     )
-    x = torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
-    return x
+    return torch.cat([torch.cos(sinusoid), torch.sin(sinusoid)], dim=1)
 
 
-@torch.amp.autocast(device_type='cuda', enabled=False)
 def rope_params(max_seq_len, dim, theta=10000, offset=0):
+    """Real cis(theta) as [S, dim/2, 2] = (cos, sin). No complex / float64."""
     assert dim % 2 == 0
-    freqs = torch.outer(
-        torch.arange(max_seq_len)+offset,
-        1.0 / torch.pow(theta, torch.arange(0, dim, 2).to(torch.float64).div(dim))
+    pos = torch.arange(max_seq_len, dtype=torch.float32) + float(offset)
+    inv = 1.0 / torch.pow(
+        float(theta),
+        torch.arange(0, dim, 2, dtype=torch.float32).div(dim),
     )
-    freqs = torch.polar(torch.ones_like(freqs), freqs)
-    return freqs
+    angles = torch.outer(pos, inv)
+    return torch.stack((torch.cos(angles), torch.sin(angles)), dim=-1)
 
 
-@torch.amp.autocast(device_type='cuda', enabled=False)
 def rope_apply(x, grid_sizes, freqs, time_stride=1):
+    """Rotary on last-dim pairs. freqs: [S, pairs, 2]."""
     n, c = x.size(2), x.size(3) // 2
-
-    # split freqs
     freqs = freqs.split([c - 2 * (c // 3), c // 3, c // 3], dim=1)
-
-    # loop over samples
     output = []
     for i, (f, h, w) in enumerate(grid_sizes.tolist()):
         seq_len = f * h * w
-
-        # precompute multipliers
-        x_i = torch.view_as_complex(
-            x[i, :seq_len].to(torch.float64).reshape(seq_len, n, -1, 2)
-        )
-        freqs_i = torch.cat([
-            freqs[0][:f*time_stride:time_stride].view(f, 1, 1, -1).expand(f, h, w, -1),
-            freqs[1][:h].view(1, h, 1, -1).expand(f, h, w, -1),
-            freqs[2][:w].view(1, 1, w, -1).expand(f, h, w, -1)
-        ], dim=-1).reshape(seq_len, 1, -1)
-
-        # apply rotary embedding
-        x_i = torch.view_as_real(x_i * freqs_i).flatten(2)
-        x_i = torch.cat([x_i, x[i, seq_len:]])
-
-        # append to collection
-        output.append(x_i)
+        x_pairs = x[i, :seq_len].float().reshape(seq_len, n, -1, 2)
+        freqs_i = torch.cat(
+            [
+                freqs[0][: f * time_stride : time_stride].view(f, 1, 1, -1, 2).expand(f, h, w, -1, 2),
+                freqs[1][:h].view(1, h, 1, -1, 2).expand(f, h, w, -1, 2),
+                freqs[2][:w].view(1, 1, w, -1, 2).expand(f, h, w, -1, 2),
+            ],
+            dim=-2,
+        ).reshape(seq_len, 1, -1, 2)
+        xr, xi = x_pairs.unbind(-1)
+        cos, sin = freqs_i.unbind(-1)
+        rotated = torch.stack((xr * cos - xi * sin, xr * sin + xi * cos), dim=-1).flatten(2)
+        output.append(torch.cat([rotated.type_as(x), x[i, seq_len:]], dim=0))
     return torch.stack(output).float()
 
+
 def pad_freqs(original_tensor, target_len):
-    seq_len, s1, s2 = original_tensor.shape
+    seq_len = original_tensor.shape[0]
     pad_size = target_len - seq_len
-    padding_tensor = torch.ones(
-        pad_size,
-        s1,
-        s2,
-        dtype=original_tensor.dtype,
-        device=original_tensor.device)
-    padded_tensor = torch.cat([original_tensor, padding_tensor], dim=0)
-    return padded_tensor
+    if pad_size <= 0:
+        return original_tensor
+    pad_shape = (pad_size,) + original_tensor.shape[1:]
+    padding = original_tensor.new_zeros(pad_shape)
+    if original_tensor.ndim >= 2 and original_tensor.shape[-1] == 2:
+        padding[..., 0] = 1
+    else:
+        padding = original_tensor.new_ones(pad_shape)
+    return torch.cat([original_tensor, padding], dim=0)
 
 
 class RMSNorm(nn.Module):
@@ -242,7 +235,7 @@ class AttentionBlock(nn.Module):
     
     def pre_self_attention(self, x, e):
         assert e.dtype == torch.float32
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             e = (self.modulation + e).chunk(6, dim=1)
         assert e[0].dtype == torch.float32
 
@@ -256,7 +249,7 @@ class AttentionBlock(nn.Module):
     def cross_attention(self, x, context, context_lens, e):
         x = x + self.cross_attn(self.norm3(x), context, context_lens)
         y = self.ffn(self.norm2(x).float() * (1 + e[4]) + e[3])
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             x = x + y * e[5]
         return x
 
@@ -326,7 +319,7 @@ class Incontext_AttentionBlock(nn.Module):
 
         y_ref = self.block(xout_ref, method='post_self_attention')
 
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             x_ref = x_ref + y_ref * e_ref[2]
 
         x_ref = self.block(x_ref, context_ref, context_lens, e_ref, method='cross_attention')
@@ -411,7 +404,7 @@ class Incontext_AttentionBlock(nn.Module):
            
         y = self.block(xout, method='post_self_attention')
 
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             x = x + y * e[2]
 
         x = self.block(x, context, context_lens, e, method='cross_attention')
@@ -437,7 +430,7 @@ class Head(nn.Module):
 
     def forward(self, x, e):
         assert e.dtype == torch.float32
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             e = (self.modulation + e.unsqueeze(1)).chunk(2, dim=1)
             x = self.head(self.norm(x) * (1 + e[1]) + e[0])
         return x
@@ -596,7 +589,7 @@ class WanAnimate2Transformer(nn.Module):
             self.freqs_ref = self.freqs_ref.to(device)
         
         # time embeddings ref
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             e_ref = self.time_embedding(
                 sinusoidal_embedding_1d(self.freq_dim, t*0+1).float()
             )
@@ -690,7 +683,7 @@ class WanAnimate2Transformer(nn.Module):
             self.freqs_ref = self.freqs_ref.to(device)
 
         # time embeddings
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             e = self.time_embedding(
                 sinusoidal_embedding_1d(self.freq_dim, t).float()
             )
@@ -823,7 +816,7 @@ class WanAnimate2Transformer(nn.Module):
             self.freqs_ref = self.freqs_ref.to(device)
 
         # time embeddings
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             e = self.time_embedding(
                 sinusoidal_embedding_1d(self.freq_dim, t).float()
             )
@@ -831,7 +824,7 @@ class WanAnimate2Transformer(nn.Module):
             assert e.dtype == torch.float32 and e0.dtype == torch.float32
         
         # time embeddings ref
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=torch.float32):
             e_ref = self.time_embedding(
                 sinusoidal_embedding_1d(self.freq_dim, t*0+1).float()
             )

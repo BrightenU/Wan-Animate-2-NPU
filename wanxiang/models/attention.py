@@ -60,6 +60,155 @@ def make_incontext_spec(origin_len, origin_area, log_scale=0.0):
     )
 
 
+_NPU_FA_WARNED = False
+
+
+def _half(x, dtype):
+    return x if x.dtype in (torch.float16, torch.bfloat16) else x.to(dtype)
+
+
+def _repeat_kv(k, v, nq):
+    nk = k.size(2)
+    if nq == nk:
+        return k, v
+    assert nq % nk == 0, "Nq must be divisible by Nk"
+    rep = nq // nk
+    return k.repeat_interleave(rep, dim=2), v.repeat_interleave(rep, dim=2)
+
+
+def _key_padding_mask(k_lens, batch, lk, device, dtype):
+    if k_lens is None:
+        return None
+    idx = torch.arange(lk, device=device)
+    keep = idx.view(1, 1, 1, lk) < k_lens.to(device).view(batch, 1, 1, 1)
+    mask = torch.zeros(batch, 1, 1, lk, device=device, dtype=dtype)
+    return mask.masked_fill(~keep, float("-inf"))
+
+
+def _flash_attention_cuda(
+    q,
+    k,
+    v,
+    q_lens,
+    k_lens,
+    dropout_p,
+    softmax_scale,
+    q_scale,
+    causal,
+    window_size,
+    deterministic,
+    dtype,
+):
+    b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
+
+    if q_lens is None:
+        q = _half(q.flatten(0, 1), dtype)
+        q_lens = torch.tensor([lq] * b, dtype=torch.int32, device=q.device)
+    else:
+        q = _half(torch.cat([u[:n] for u, n in zip(q, q_lens)]), dtype)
+
+    if k_lens is None:
+        k = _half(k.flatten(0, 1), dtype)
+        v = _half(v.flatten(0, 1), dtype)
+        k_lens = torch.tensor([lk] * b, dtype=torch.int32, device=k.device)
+    else:
+        k = _half(torch.cat([u[:n] for u, n in zip(k, k_lens)]), dtype)
+        v = _half(torch.cat([u[:n] for u, n in zip(v, k_lens)]), dtype)
+
+    q = q.to(v.dtype)
+    k = k.to(v.dtype)
+    if q_scale is not None:
+        q = q * q_scale
+
+    cu_q = torch.cat([q_lens.new_zeros([1]), q_lens]).cumsum(0, dtype=torch.int32)
+    cu_k = torch.cat([k_lens.new_zeros([1]), k_lens]).cumsum(0, dtype=torch.int32)
+
+    if FLASH_VER == 3:
+        x = flash_attn_varlen_func(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=cu_q,
+            cu_seqlens_k=cu_k,
+            max_seqlen_q=lq,
+            max_seqlen_k=lk,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            deterministic=deterministic,
+        )[0].unflatten(0, (b, lq))
+    else:
+        assert FLASH_VER == 2, "flash_attn is required on CUDA"
+        x = flash_attn_varlen_func(
+            q=q,
+            k=k,
+            v=v,
+            cu_seqlens_q=cu_q,
+            cu_seqlens_k=cu_k,
+            max_seqlen_q=lq,
+            max_seqlen_k=lk,
+            dropout_p=dropout_p,
+            softmax_scale=softmax_scale,
+            causal=causal,
+            window_size=window_size,
+            deterministic=deterministic,
+        ).unflatten(0, (b, lq))
+    return x.type(out_dtype)
+
+
+def _flash_attention_sdpa(q, k, v, q_lens, k_lens, dropout_p, softmax_scale, causal):
+    q, k = q.to(v.dtype), k.to(v.dtype)
+    k, v = _repeat_kv(k, v, q.size(2))
+    if q_lens is not None:
+        q = q[:, : int(q_lens.max().item())]
+    if k_lens is not None:
+        max_k = int(k_lens.max().item())
+        k = k[:, :max_k]
+        v = v[:, :max_k]
+    attn_mask = _key_padding_mask(k_lens, q.size(0), k.size(1), q.device, q.dtype)
+    out = F.scaled_dot_product_attention(
+        q.transpose(1, 2),
+        k.transpose(1, 2),
+        v.transpose(1, 2),
+        attn_mask=attn_mask,
+        dropout_p=dropout_p,
+        is_causal=bool(causal) and attn_mask is None,
+        scale=softmax_scale,
+    )
+    return out.transpose(1, 2).contiguous()
+
+
+def _flash_attention_npu(q, k, v, q_lens, k_lens, dropout_p, softmax_scale, causal):
+    import torch_npu
+
+    q, k = q.to(v.dtype), k.to(v.dtype)
+    k, v = _repeat_kv(k, v, q.size(2))
+    if q_lens is not None:
+        q = q[:, : int(q_lens.max().item())]
+    if k_lens is not None:
+        max_k = int(k_lens.max().item())
+        k = k[:, :max_k]
+        v = v[:, :max_k]
+
+    scale = (q.shape[-1] ** -0.5) if softmax_scale is None else softmax_scale
+    qn = q.transpose(1, 2).contiguous()
+    kn = k.transpose(1, 2).contiguous()
+    vn = v.transpose(1, 2).contiguous()
+    kwargs = {
+        "scale": scale,
+        "keep_prob": 1.0 if dropout_p is None else float(1.0 - dropout_p),
+    }
+    if causal:
+        kwargs["pre_tockens"] = 65536
+        kwargs["next_tockens"] = 0
+    if k_lens is not None and (k_lens < k.size(1)).any():
+        idx = torch.arange(k.size(1), device=q.device)
+        kwargs["atten_mask"] = idx.view(1, 1, 1, -1) >= k_lens.to(q.device).view(-1, 1, 1, 1)
+    ret = torch_npu.npu_fusion_attention(
+        qn, kn, vn, qn.shape[1], "BNSD", **kwargs
+    )
+    return ret[0].transpose(1, 2).contiguous()
+
+
 def flash_attention(
     q,
     k,
@@ -78,79 +227,40 @@ def flash_attention(
     q:              [B, Lq, Nq, C1].
     k:              [B, Lk, Nk, C1].
     v:              [B, Lk, Nk, C2]. Nq must be divisible by Nk.
+
+    CUDA: flash-attn varlen. NPU: npu_fusion_attention. Else: SDPA.
     """
-    half_dtypes = (torch.float16, torch.bfloat16)
-    assert dtype in half_dtypes
-    assert q.device.type == "cuda" and q.size(-1) <= 256
+    global _NPU_FA_WARNED
+    assert dtype in (torch.float16, torch.bfloat16)
+    assert q.size(-1) <= 256
+    out_dtype = q.dtype
+    kind = q.device.type
 
-    b, lq, lk, out_dtype = q.size(0), q.size(1), k.size(1), q.dtype
-
-    def half(x):
-        return x if x.dtype in half_dtypes else x.to(dtype)
-
-    if q_lens is None:
-        q = half(q.flatten(0, 1))
-        q_lens = torch.tensor([lq] * b, dtype=torch.int32).to(
-            device=q.device, non_blocking=True
+    if kind == "cuda" and FLASH_VER is not None:
+        return _flash_attention_cuda(
+            q, k, v, q_lens, k_lens, dropout_p, softmax_scale, q_scale,
+            causal, window_size, deterministic, dtype,
         )
-    else:
-        q = half(torch.cat([u[:v] for u, v in zip(q, q_lens)]))
 
-    if k_lens is None:
-        k = half(k.flatten(0, 1))
-        v = half(v.flatten(0, 1))
-        k_lens = torch.tensor([lk] * b, dtype=torch.int32).to(
-            device=k.device, non_blocking=True
-        )
-    else:
-        k = half(torch.cat([u[:v] for u, v in zip(k, k_lens)]))
-        v = half(torch.cat([u[:v] for u, v in zip(v, k_lens)]))
-
-    q = q.to(v.dtype)
-    k = k.to(v.dtype)
-
+    q = _half(q, dtype)
+    k = _half(k, dtype)
+    v = _half(v, dtype)
     if q_scale is not None:
         q = q * q_scale
 
-    if FLASH_VER == 3:
-        x = flash_attn_varlen_func(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens])
-            .cumsum(0, dtype=torch.int32)
-            .to(q.device, non_blocking=True),
-            cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens])
-            .cumsum(0, dtype=torch.int32)
-            .to(q.device, non_blocking=True),
-            max_seqlen_q=lq,
-            max_seqlen_k=lk,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            deterministic=deterministic,
-        )[0].unflatten(0, (b, lq))
-    else:
-        assert FLASH_VER == 2
-        x = flash_attn_varlen_func(
-            q=q,
-            k=k,
-            v=v,
-            cu_seqlens_q=torch.cat([q_lens.new_zeros([1]), q_lens])
-            .cumsum(0, dtype=torch.int32)
-            .to(q.device, non_blocking=True),
-            cu_seqlens_k=torch.cat([k_lens.new_zeros([1]), k_lens])
-            .cumsum(0, dtype=torch.int32)
-            .to(q.device, non_blocking=True),
-            max_seqlen_q=lq,
-            max_seqlen_k=lk,
-            dropout_p=dropout_p,
-            softmax_scale=softmax_scale,
-            causal=causal,
-            window_size=window_size,
-            deterministic=deterministic,
-        ).unflatten(0, (b, lq))
+    if kind == "npu":
+        try:
+            return _flash_attention_npu(
+                q, k, v, q_lens, k_lens, dropout_p, softmax_scale, causal
+            ).type(out_dtype)
+        except Exception as exc:
+            if not _NPU_FA_WARNED:
+                print(f"[PreInfo] npu_fusion_attention fallback to SDPA: {exc}")
+                _NPU_FA_WARNED = True
 
-    return x.type(out_dtype)
+    return _flash_attention_sdpa(
+        q, k, v, q_lens, k_lens, dropout_p, softmax_scale, causal
+    ).type(out_dtype)
 
 
 def _math_out_lse(q, k, v, softmax_scale=None):

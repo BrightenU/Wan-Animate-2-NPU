@@ -1,9 +1,10 @@
 import os
+from wanxiang.ops.device import device_string
 
 class BaseInferencePipeline:
     def __init__(self, cfg):
         self.hparams = cfg
-        self.device = "cuda"
+        self.device = device_string(0)
         self.global_rank = 0
         self.global_step = 0
         self.world_size = 1

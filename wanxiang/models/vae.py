@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-import torch.cuda.amp as amp
 
 __all__ = [
     "VideoVAE",
@@ -716,7 +715,7 @@ class VideoVAE:
         z_dim=16,
         vae_pth="cache/vae_step_411000.pth",
         dtype=torch.float,
-        device="cuda",
+        device="cpu",
     ):
         self.dtype = dtype
         self.device = device

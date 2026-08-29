@@ -1,7 +1,7 @@
 import inspect
 import numpy as np
 import torch
-import torch.cuda.amp as amp
+from wanxiang.ops.device import amp_device_type, current_device
 
 from .utils import HuggingfaceTokenizer
 from .utils.utils import to_
@@ -17,14 +17,14 @@ class T5Encoder:
         name,
         text_len,
         dtype=torch.bfloat16,
-        device=torch.cuda.current_device(),
+        device=None,
         checkpoint_path=None,
         tokenizer_path=None,
     ):
         self.name = name
         self.text_len = text_len
         self.dtype = dtype
-        self.device = device
+        self.device = device if device is not None else current_device()
         self.checkpoint_path = checkpoint_path
         self.tokenizer_path = tokenizer_path
 
@@ -95,7 +95,7 @@ class CLIP:
         videos = self.transforms.transforms[-1](videos.mul_(0.5).add_(0.5))
 
         # forward
-        with amp.autocast(dtype=self.dtype):
+        with torch.amp.autocast(device_type=amp_device_type(), dtype=self.dtype):
             out = self.model.visual(videos, use_31_block=True)
             return out
 
@@ -149,7 +149,7 @@ def retrieve_timesteps(
     return timesteps, num_inference_steps
 
 
-def get_i2v_mask(lat_t, lat_h, lat_w, mask_len=1, device="cuda"):
+def get_i2v_mask(lat_t, lat_h, lat_w, mask_len=1, device=None):
     """注意，这里传入的mask_len是在原始像素空间的。
 
     Args:
@@ -161,6 +161,8 @@ def get_i2v_mask(lat_t, lat_h, lat_w, mask_len=1, device="cuda"):
     Returns:
         _type_: _description_
     """
+    if device is None:
+        device = current_device()
     msk = torch.zeros(1, (lat_t-1) * 4 + 1, lat_h, lat_w, device=device)
     msk[:, :mask_len] = 1
     msk = torch.concat([torch.repeat_interleave(msk[:, 0:1], repeats=4, dim=1), msk[:, 1:]], dim=1)
@@ -168,7 +170,7 @@ def get_i2v_mask(lat_t, lat_h, lat_w, mask_len=1, device="cuda"):
     msk = msk.transpose(1, 2)[0]
     return msk
 
-def get_i2vmask_mask(mask_pixel_values, lat_t, lat_h, lat_w, mask_len=1, device="cuda"):
+def get_i2vmask_mask(mask_pixel_values, lat_t, lat_h, lat_w, mask_len=1, device=None):
     """注意，这里传入的mask_len是在原始像素空间的。
 
     Args:
